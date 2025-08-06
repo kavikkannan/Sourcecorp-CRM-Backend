@@ -1,20 +1,22 @@
 package controllers
 
 import (
+	"bytes"
 	"database/sql"
+	"encoding/base64"
+	"encoding/json"
+	"fmt"
+	"io"
+	"log"
+	"sort"
+	"strconv"
+	"strings"
+	"time"
+
 	"github.com/dgrijalva/jwt-go"
 	"github.com/gofiber/fiber/v2"
 	"github.com/kavikkannan/go-ecommerce-grocery-delivery-service/pkg/config"
 	"golang.org/x/crypto/bcrypt"
-	"bytes"
-	"encoding/base64"
-	"strconv"
-	"time"
-	"fmt"
-	"log"
-	"io"
-	"encoding/json"
-	"strings" 
 )
 
 const SecretKey = "secret"
@@ -573,84 +575,126 @@ func GetUserHierarchy(c *fiber.Ctx) error {
 }
 
  */
-
  func GetUserHierarchy(c *fiber.Ctx) error {
-	userID := c.Params("userId")
-	var hierarchy string
-	var reportTo int
+    userID := c.Params("userId")
+    var hierarchy string
+    var reportTo sql.NullInt64  // Use sql.NullInt64 to handle NULL values
+    visited := make(map[string]bool) // Track visited users to prevent loops
 
-	// Call GetAppointedUser to get appointed user IDs
-	hierarchySet := make(map[string]bool)
-	getAppointedMembers(config.DB, userID, hierarchySet) // Fetch appointed members
+    // Call GetAppointedUser to get appointed user IDs
+    hierarchySet := make(map[string]bool)
+    getAppointedMembers(config.DB, userID, hierarchySet, make(map[string]bool)) // Pass visited map
 
-	// Convert map to a comma-separated string
-	var hierarchyList []string
-	for member := range hierarchySet {
-		hierarchyList = append(hierarchyList, member)
-	}
-	hierarchy = strings.Join(hierarchyList, ",")
+    // Convert map to a comma-separated string
+    var hierarchyList []string
+    for member := range hierarchySet {
+        hierarchyList = append(hierarchyList, member)
+    }
+    hierarchy = strings.Join(hierarchyList, ",")
 
-	// Now, find the reportTo hierarchy
-	for {
-		err := config.DB.QueryRow("SELECT reportTo FROM Login WHERE id = ?", userID).Scan(&reportTo)
-		if err == sql.ErrNoRows {
-			return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"message": "User not found"})
-		} else if err != nil {
-			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"message": "Database error"})
-		}
+    // Now, find the reportTo hierarchy
+    currentUserID := userID
+    for {
+        // Check for infinite loop
+        if visited[currentUserID] {
+            return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+                "message": "Circular reference detected in user hierarchy",
+            })
+        }
+        visited[currentUserID] = true
 
-		// Append reportTo to the hierarchy
-		hierarchy += "," + strconv.Itoa(reportTo)
+        // Query with proper NULL handling
+        err := config.DB.QueryRow("SELECT reportTo FROM Login WHERE id = ?", currentUserID).Scan(&reportTo)
+        if err == sql.ErrNoRows {
+            return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"message": "User not found"})
+        } else if err != nil {
+            return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+                "message": "Database error",
+                "error":   err.Error(), // Include error details for debugging
+            })
+        }
 
-		// Stop if reportTo is 1
-		if reportTo == 1 {
-			break
-		}
+        // Check if reportTo is NULL
+        if !reportTo.Valid {
+            break
+        }
 
-		// Update userID for next iteration
-		userID = strconv.Itoa(reportTo)
-	}
+        // Append reportTo to the hierarchy if not already present
+        reportToStr := strconv.FormatInt(reportTo.Int64, 10)
+        if !hierarchySet[reportToStr] {
+            if hierarchy != "" {
+                hierarchy += ","
+            }
+            hierarchy += reportToStr
+        }
 
-	// Return the combined hierarchy
-	return c.JSON(fiber.Map{"hierarchy": hierarchy})
+        // Stop if we've reached the top of the hierarchy
+        if reportTo.Int64 == 1 {
+            break
+        }
+
+        // Update currentUserID for next iteration
+        currentUserID = reportToStr
+    }
+
+    // Return the combined hierarchy
+    return c.JSON(fiber.Map{"hierarchy": hierarchy})
 }
 
-func getAppointedMembers(db *sql.DB, userID string, hierarchySet map[string]bool) {
-	var appointedMembers string
-	err := db.QueryRow("SELECT appointed_members FROM Login WHERE id = ?", userID).Scan(&appointedMembers)
+func getAppointedMembers(db *sql.DB, userID string, hierarchySet map[string]bool, visited map[string]bool) {
+    if visited[userID] {
+        return // Prevent infinite recursion
+    }
+    visited[userID] = true
 
-	if err != nil {
-		return // Stop if user not found or error occurs
-	}
+    var appointedMembers string
+    err := db.QueryRow("SELECT appointed_members FROM Login WHERE id = ?", userID).Scan(&appointedMembers)
 
-	// Split appointed members (assuming they are stored as comma-separated values)
-	members := strings.Split(appointedMembers, ",")
+    if err != nil {
+        return // Stop if user not found or error occurs
+    }
 
-	for _, member := range members {
-		member = strings.TrimSpace(member) // Clean spaces
+    // Split appointed members (assuming they are stored as comma-separated values)
+    members := strings.Split(appointedMembers, ",")
 
-		// Avoid duplicates
-		if member != "" && !hierarchySet[member] {
-			hierarchySet[member] = true
-			getAppointedMembers(db, member, hierarchySet) // Recursive call
-		}
-	}
+    for _, member := range members {
+        member = strings.TrimSpace(member)
+        if member != "" && !hierarchySet[member] {
+            hierarchySet[member] = true
+            getAppointedMembers(db, member, hierarchySet, visited) // Pass visited map
+        }
+    }
 }
 
 // Handler function
 func GetAppointedUser(c *fiber.Ctx) error {
-	userID := c.Params("userId")
-	hierarchySet := make(map[string]bool) // Use a map to prevent duplicates
+    userID := c.Params("userId")
+    if userID == "" {
+        return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+            "message": "User ID is required",
+        })
+    }
 
-	getAppointedMembers(config.DB, userID, hierarchySet) // Start recursion
+    // Initialize the hierarchy set and visited map
+    hierarchySet := make(map[string]bool)
+    visited := make(map[string]bool)
 
-	// Convert map keys to a comma-separated string
-	var hierarchyList []string
-	for member := range hierarchySet {
-		hierarchyList = append(hierarchyList, member)
-	}
+    // Start recursion with the visited map
+    getAppointedMembers(config.DB, userID, hierarchySet, visited)
 
-	return c.JSON(fiber.Map{"hierarchy": strings.Join(hierarchyList, ",")})
+    // Convert map keys to a sorted slice for consistent output
+    hierarchyList := make([]string, 0, len(hierarchySet))
+    for member := range hierarchySet {
+        hierarchyList = append(hierarchyList, member)
+    }
+
+    // Sort the hierarchy list for consistent output
+    sort.Strings(hierarchyList)
+
+    return c.JSON(fiber.Map{
+        "hierarchy": strings.Join(hierarchyList, ","),
+        "count":     len(hierarchyList),
+    })
 }
 
 
