@@ -3,11 +3,22 @@ package routes
 import (
 	"github.com/gofiber/fiber/v2"
 	"github.com/kavikkannan/go-ecommerce-grocery-delivery-service/pkg/controllers"
+	AdminMiddleware "github.com/kavikkannan/go-ecommerce-grocery-delivery-service/pkg/middleware"
 )
 
 func Setup(app *fiber.App) {
+	// --- User CRUD ---
+	app.Put("/api/users/:id",AdminMiddleware.AdminMiddleware, controllers.UpdateUser)    // Update user
+	app.Delete("/api/users/:id",AdminMiddleware.AdminMiddleware, controllers.DeleteUser) // Delete user
 
-	app.Post("/api/register", controllers.Register)
+	// --- Case CRUD & Bulk (Admin only) ---
+	app.Get("/api/cases", AdminMiddleware.AdminMiddleware, controllers.ListCasesWithFilter) // List/filter cases
+	app.Delete("/api/cases/:id", AdminMiddleware.AdminMiddleware, controllers.DeleteCase)   // Delete single case
+	app.Delete("/api/cases/bulk", AdminMiddleware.AdminMiddleware, controllers.DeleteCasesBulk) // Bulk delete
+	app.Get("/api/cases/report", AdminMiddleware.AdminMiddleware, controllers.DownloadCaseReport) // Download report
+
+
+	app.Post("/api/register", AdminMiddleware.AdminMiddleware,controllers.Register)
 	app.Post("/api/login", controllers.Login)
 	app.Get("/api/user", controllers.User)
 	app.Get("/api/user/:userId", controllers.GetUserByID)
@@ -38,8 +49,9 @@ func Setup(app *fiber.App) {
 		app.Get("/api/users/:role", controllers.GetUsersByRole)              // Fetch users by role
 		app.Get("/api/lowusers/:role", controllers.GetUsersByRole)              // Fetch users by role
 
-		app.Get("/api/all-users", controllers.GetAllUsers)            // Fetch all users
-		app.Post("/api/appoint", controllers.AppointMember)           // Assign lower-level workers
+		app.Get("/api/all-users",AdminMiddleware.AdminMiddleware, controllers.GetAllUsers)            // Fetch all users
+		app.Post("/api/appoint",AdminMiddleware.AdminMiddleware, controllers.AppointMember) 
+		app.Post("/api/removeAppointedMember",AdminMiddleware.AdminMiddleware, controllers.RemoveAppointedMember)           // Assign lower-level workers
 		app.Get("/api/appointed/:userId", controllers.GetAppointedMembers) 
 
 		app.Get("/api/schedule/:userId", controllers.GetUserHierarchy) 

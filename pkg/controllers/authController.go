@@ -19,6 +19,160 @@ import (
 
 const SecretKey = "secret"
 
+// UpdateUser updates user details (name, email, role, password, etc.)
+func UpdateUser(c *fiber.Ctx) error {
+	id := c.Params("id")
+	var data map[string]interface{}
+	if err := c.BodyParser(&data); err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"message": "Invalid request body"})
+	}
+
+	// If password change requested, verify old password or admin key
+	if data["Password"] != nil && data["Password"] != "" {
+		// AuthMode: "old-password" or "admin-key"
+		authMode, _ := data["AuthMode"].(string)
+		if authMode == "old-password" {
+			var hashedPassword []byte
+			err := config.DB.QueryRow("SELECT password FROM Login WHERE id = ?", id).Scan(&hashedPassword)
+			if err != nil {
+				return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"message": "User not found"})
+			}
+			if err := bcrypt.CompareHashAndPassword(hashedPassword, []byte(data["OldPassword"].(string))); err != nil {
+				return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"message": "Old password incorrect"})
+			}
+		} else if authMode == "admin-key" {
+			if data["AdminKey"] != "your_admin_key" { // Replace with your admin key logic
+				return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"message": "Admin key incorrect"})
+			}
+		}
+		// Hash new password
+		password, _ := bcrypt.GenerateFromPassword([]byte(data["Password"].(string)), 14)
+		_, err := config.DB.Exec("UPDATE Login SET password = ? WHERE id = ?", password, id)
+		if err != nil {
+			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"message": "Failed to update password"})
+		}
+	}
+	// Update other fields
+	_, err := config.DB.Exec("UPDATE Login SET name=?, email=?, role=? WHERE id=?",
+		data["Name"], data["Email"], data["Role"], id)
+	if err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"message": "Failed to update user"})
+	}
+	return c.JSON(fiber.Map{"message": "User updated successfully"})
+}
+
+// DeleteUser removes a user by ID
+func DeleteUser(c *fiber.Ctx) error {
+	id := c.Params("id")
+	_, err := config.DB.Exec("DELETE FROM Login WHERE id = ?", id)
+	if err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"message": "Failed to delete user"})
+	}
+	return c.JSON(fiber.Map{"message": "User deleted successfully"})
+}
+
+// ListCasesWithFilter returns cases filtered by id, name, or status
+func ListCasesWithFilter(c *fiber.Ctx) error {
+	q := "SELECT pindex,caseId , Name, status FROM CaseName WHERE 1=1"
+	params := []interface{}{}
+	if id := c.Query("id"); id != "" {
+		q += " AND pindex = ?"
+		params = append(params, id)
+	}
+	if name := c.Query("name"); name != "" {
+		q += " AND Name LIKE ?"
+		params = append(params, "%"+name+"%")
+	}
+	if caseid := c.Query("caseid"); caseid != "" {
+		q += " AND caseId LIKE ?"
+		params = append(params, "%"+caseid+"%")
+	}
+	if status := c.Query("status"); status != "" {
+		q += " AND status = ?"
+		params = append(params, status)
+	}
+	rows, err := config.DB.Query(q, params...)
+	if err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"message": "Failed to fetch cases"})
+	}
+	defer rows.Close()
+	var cases []map[string]interface{}
+	for rows.Next() {
+		var pindex, name, status, caseid string
+		if err := rows.Scan(&pindex, &caseid, &name, &status); err != nil {
+			continue
+		}
+		cases = append(cases, map[string]interface{}{"id": pindex, "name": name, "status": status , "caseid": caseid})
+	}
+	return c.JSON(cases)
+}
+
+// DeleteCase deletes a single case by pindex
+func DeleteCase(c *fiber.Ctx) error {
+	id := c.Params("id")
+	_, err := config.DB.Exec("DELETE FROM CaseName WHERE pindex = ?", id)
+	if err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"message": "Failed to delete case"})
+	}
+	return c.JSON(fiber.Map{"message": "Case deleted successfully"})
+}
+
+// DeleteCasesBulk deletes multiple cases by pindex array
+func DeleteCasesBulk(c *fiber.Ctx) error {
+	var body struct { Ids []string `json:"ids"` }
+	if err := c.BodyParser(&body); err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"message": "Invalid request body"})
+	}
+	if len(body.Ids) == 0 {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"message": "No IDs provided"})
+	}
+	print(body.Ids)
+	q := "DELETE FROM CaseName WHERE pindex IN (" + strings.TrimRight(strings.Repeat("?,", len(body.Ids)), ",") + ")"
+	params := make([]interface{}, len(body.Ids))
+	for i, v := range body.Ids { params[i] = v }
+	_, err := config.DB.Exec(q, params...)
+	if err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"message": "Failed to delete cases"})
+	}
+	return c.JSON(fiber.Map{"message": "Cases deleted successfully"})
+}
+
+// DownloadCaseReport returns a CSV or PDF report for selected cases
+func DownloadCaseReport(c *fiber.Ctx) error {
+	ids := c.Query("ids")
+	format := c.Query("format")
+	if ids == "" || format == "" {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"message": "Missing ids or format"})
+	}
+	idArr := strings.Split(ids, ",")
+	q := "SELECT pindex, Name, status FROM CaseName WHERE pindex IN (" + strings.TrimRight(strings.Repeat("?,", len(idArr)), ",") + ")"
+	params := make([]interface{}, len(idArr))
+	for i, v := range idArr { params[i] = v }
+	rows, err := config.DB.Query(q, params...)
+	if err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"message": "Failed to fetch cases"})
+	}
+	defer rows.Close()
+	var csvData strings.Builder
+	csvData.WriteString("ID,Name,Status\n")
+	for rows.Next() {
+		var id, name, status string
+		if err := rows.Scan(&id, &name, &status); err != nil { continue }
+		csvData.WriteString(id + "," + name + "," + status + "\n")
+	}
+	if format == "csv" {
+		c.Set("Content-Type", "text/csv")
+		c.Set("Content-Disposition", "attachment; filename=cases.csv")
+		return c.SendString(csvData.String())
+	} else if format == "pdf" {
+		// For demo: just send CSV as PDF (real PDF: use a PDF lib)
+		c.Set("Content-Type", "application/pdf")
+		c.Set("Content-Disposition", "attachment; filename=cases.pdf")
+		return c.SendString(csvData.String())
+	}
+	return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"message": "Invalid format"})
+}
+
 // Register function
 func Register(c *fiber.Ctx) error {
     var data map[string]interface{} 
@@ -329,7 +483,59 @@ func AppointMember(c *fiber.Ctx) error {
 	}
 
 	return c.Status(fiber.StatusOK).JSON(fiber.Map{"message": "Members appointed successfully"})
-}/* 
+}
+func RemoveAppointedMember(c *fiber.Ctx) error {
+    var data map[string]string
+
+    if err := c.BodyParser(&data); err != nil {
+        log.Println("Error parsing request body:", err)
+        return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"message": "Invalid request format"})
+    }
+
+    userID, userIDErr := strconv.Atoi(data["UserID"])
+    memberID, memberIDErr := strconv.Atoi(data["MemberID"])
+
+    if userIDErr != nil || memberIDErr != nil {
+        return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"message": "Invalid UserID or MemberID format"})
+    }
+
+    // Get current appointed members from the database
+    var currentAppointedMembers string
+    err := config.DB.QueryRow("SELECT appointed_members FROM Login WHERE id = ?", userID).Scan(&currentAppointedMembers)
+    if err == sql.ErrNoRows {
+        return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"message": "User not found"})
+    } else if err != nil {
+        log.Println("Database error:", err)
+        return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"message": "Database error"})
+    }
+
+    // Remove the memberID from the appointed members list
+    var updatedMembers []string
+    for _, id := range strings.Split(currentAppointedMembers, ",") {
+        id = strings.TrimSpace(id)
+        if id != "" && id != strconv.Itoa(memberID) {
+            updatedMembers = append(updatedMembers, id)
+        }
+    }
+    updatedMembersStr := strings.Join(updatedMembers, ",")
+
+    // Update database: set appointed_members for userID
+    _, err = config.DB.Exec("UPDATE Login SET appointed_members = ? WHERE id = ?", updatedMembersStr, userID)
+    if err != nil {
+        log.Println("Error updating appointed_members:", err)
+        return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"message": "Error updating appointed members"})
+    }
+
+    // Set reportTo of the removed member to NULL (or 0 if you prefer)
+    _, err = config.DB.Exec("UPDATE Login SET reportTo = NULL WHERE id = ?", memberID)
+    if err != nil {
+        log.Println("Error updating reportTo for user", memberID, ":", err)
+        return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"message": "Error updating reportTo for removed member"})
+    }
+
+    return c.Status(fiber.StatusOK).JSON(fiber.Map{"message": "Appointed member removed successfully"})
+}
+/* 
 func GetUserHierarchy(c *fiber.Ctx) error {
 	userID := c.Params("userId")
 	var hierarchy string

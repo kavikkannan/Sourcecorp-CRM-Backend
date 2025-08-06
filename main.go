@@ -25,7 +25,7 @@ func main() {
 		BodyLimit: 50 * 1024 * 1024, // 50MB limit
 	})
 	app.Use(cors.New(cors.Config{
-		AllowOrigins:     "https://sourcecorp.in", // Use correct frontend IP
+		AllowOrigins:     "https://vfinserv.in", // Use correct frontend IP
 		AllowCredentials: true,
 		AllowHeaders:     "Content-Type, Authorization",
 	}))

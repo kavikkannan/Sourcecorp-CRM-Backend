@@ -12,29 +12,38 @@ import (
 var DB *sql.DB
 const (
 	schemaName  = "kk"
-	localDSN    = "root:root@tcp(db:3306)/mydb?parseTime=true"
+	DB_DSN="kavi:ish@tcp(172.17.0.1:3306)/mydb"
 )
+
 func Connect() {
 	var err error
 
 	// Try connecting to local MySQL
-	DB, err = sql.Open("mysql", localDSN)
-	if err == nil && DB.Ping() == nil {
-		fmt.Println("✅ Connected to local MySQL successfully!")
-	} else {
-		fmt.Println("❌ Local MySQL unavailable. Switching to Cloudflared tunnel...")
-
+	DB, err = sql.Open("mysql", DB_DSN)
+	if err != nil {
+		log.Printf("❌ Failed to open database connection: %v\n", err)
+		log.Fatal("Exiting due to database connection error")
 	}
+
+	// Test the connection
+	err = DB.Ping()
+	if err != nil {
+		log.Printf("❌ Failed to ping database: %v\n", err)
+		log.Fatal("Exiting due to database connection error")
+	}
+
+	log.Println("✅ Connected to local MySQL successfully!")
+
 	err = createTables(DB)
 	if err != nil {
-		log.Fatalf("Failed to create tables: %v", err)
+		log.Fatalf("❌ Failed to create tables: %v\n", err)
 	}
 
 	DB.SetMaxOpenConns(25)
 	DB.SetMaxIdleConns(25)
 	DB.SetConnMaxLifetime(5 * time.Minute)
+	log.Println("✅ Database connection pool configured successfully")
 }
-
 
 
 // createTables ensures tables exist in the database
