@@ -713,7 +713,7 @@ func GetLowerHierarchyUsers(c *fiber.Ctx) error {
 }
 
 func GetAllUsers(c *fiber.Ctx) error {
-	rows, err := config.DB.Query("SELECT id, name, role FROM Login")
+	rows, err := config.DB.Query("SELECT id, name, role, branch, email, number, salary, is_admin FROM Login")
 	if err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"message": "Error fetching users"})
 	}
@@ -723,6 +723,11 @@ func GetAllUsers(c *fiber.Ctx) error {
 		ID   int    
 		Name string
 		Role string 
+		Branch string 
+		Email string 
+		Number string 
+		Salary string 
+		IsAdmin bool 
 	}
 
 	for rows.Next() {
@@ -730,8 +735,13 @@ func GetAllUsers(c *fiber.Ctx) error {
 			ID   int
 			Name string
 			Role string
+			Branch string 
+			Email string 
+			Number string 
+			Salary string 
+			IsAdmin bool 
 		}
-		if err := rows.Scan(&user.ID, &user.Name, &user.Role); err != nil {
+		if err := rows.Scan(&user.ID, &user.Name, &user.Role, &user.Branch, &user.Email, &user.Number, &user.Salary, &user.IsAdmin); err != nil {
 			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"message": "Error scanning users"})
 		}
 		users = append(users, user)
