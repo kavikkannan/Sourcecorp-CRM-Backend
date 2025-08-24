@@ -81,10 +81,10 @@ func Setup(app *fiber.App) {
 	app.Get("/api/logs/pfile/fetch/:eindex", controllers.GetELogPFile)
 
 	// Case routes
-	caseGroup := app.Group("/case")
-	caseGroup.Post("/amount", controllers.AddOrUpdateAmount)
-	caseGroup.Get("/amount", controllers.GetAmount)
-	caseGroup.Get("/encrypted-data", controllers.GetCasesForDecryption)
+
+	app.Post("/api/amount", controllers.AddOrUpdateAmount)
+	app.Get("/api/amount", controllers.GetAmount)
+	app.Get("/api/encrypted-data", controllers.GetCasesForDecryption)
 
 	app.Get("/api/fetch_amount", controllers.GetAmount)                 // Requires pindex as a query parameter
 	app.Post("/api/process_amounts", controllers.GetCasesForDecryption) // Triggers bulk processing of case amounts

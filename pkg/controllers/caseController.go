@@ -1,7 +1,6 @@
 package controllers
 
 import (
-	"database/sql"
 	"log"
 	"net/http"
 
@@ -63,30 +62,47 @@ func AddOrUpdateAmount(c *fiber.Ctx) error {
 	})
 }
 
-// GetAmount retrieves the amount for a specific case
+// GetAmount retrieves all case amounts
 func GetAmount(c *fiber.Ctx) error {
 	db := config.GetDB()
 
-	var amount float64
-	var caseID string
-	err := db.QueryRow("SELECT caseId, amount FROM CaseAmount").Scan(&caseID, &amount)
-
+	rows, err := db.Query("SELECT caseId, amount FROM CaseAmount")
 	if err != nil {
-		if err == sql.ErrNoRows {
-			return c.Status(http.StatusNotFound).JSON(fiber.Map{
-				"error": "No amount found",
-			})
-		}
-		log.Printf("Error fetching case amount: %v", err)
+		log.Printf("Error fetching case amounts: %v", err)
 		return c.Status(http.StatusInternalServerError).JSON(fiber.Map{
-			"error": "Failed to fetch case amount",
+			"error": "Failed to fetch case amounts",
+		})
+	}
+	defer rows.Close()
+
+	var amounts []fiber.Map
+	for rows.Next() {
+		var caseID string
+		var amount float64
+		if err := rows.Scan(&caseID, &amount); err != nil {
+			log.Printf("Error scanning case amount: %v", err)
+			continue
+		}
+		amounts = append(amounts, fiber.Map{
+			"caseId": caseID,
+			"amount": amount,
 		})
 	}
 
-	return c.JSON(fiber.Map{
-		"caseId": caseID,
-		"amount": amount,
-	})
+	if err = rows.Err(); err != nil {
+		log.Printf("Error iterating case amounts: %v", err)
+		return c.Status(http.StatusInternalServerError).JSON(fiber.Map{
+			"error": "Error processing case amounts",
+		})
+	}
+
+	if len(amounts) == 0 {
+		return c.Status(http.StatusNotFound).JSON(fiber.Map{
+			"error": "No case amounts found",
+		})
+	}
+
+	return c.JSON(amounts)
 }
 
 // CaseForDecryption represents case data needed for frontend decryption
