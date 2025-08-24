@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"fmt"
 	"log"
+
 	"time"
 
 	_ "github.com/go-sql-driver/mysql"
@@ -73,7 +74,7 @@ func createTables(db *sql.DB) error {
 			coustomerDetails VARCHAR(500) NOT NULL,
 			unknown1 TEXT NOT NULL,
 			caseDate TEXT NOT NULL,
-			caseId TEXT NOT NULL
+			caseId VARCHAR(255) NOT NULL UNIQUE
 
 		);`,
 		`CREATE TABLE IF NOT EXISTS CaseFiles (
@@ -111,6 +112,12 @@ func createTables(db *sql.DB) error {
 			pfileiv TEXT NOT NULL,
 			version INT NOT NULL
 		);`,
+		`CREATE TABLE IF NOT EXISTS CaseAmount (
+		pindex VARCHAR(255) NOT NULL PRIMARY KEY,
+		caseId VARCHAR(255) NOT NULL,
+		amount DECIMAL(12,2) NOT NULL,
+		FOREIGN KEY (pindex) REFERENCES CaseName(pindex) ON DELETE CASCADE
+	) ENGINE=InnoDB;`,
 	}
 
 	for _, stmt := range tableStatements {

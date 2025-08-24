@@ -935,7 +935,7 @@ func GetEMessage(c *fiber.Ctx) error {
  */
 
 
-// SetCase inserts a new record into the CaseName table
+// SetCase inserts a new record into the CaseName table and updates the amount
 func SetCase(c *fiber.Ctx) error {
 	// Define a map to hold the incoming JSON data
 	var data map[string]string
@@ -946,13 +946,19 @@ func SetCase(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"message": "Invalid request format"})
 	}
 
-	// Prepare the SQL query
+	// Start a transaction
+	tx, err := config.DB.Begin()
+	if err != nil {
+		log.Println("Error starting transaction:", err)
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"message": "Failed to start transaction"})
+	}
+
+	// Insert into CaseName table
 	query := `
 		INSERT INTO CaseName (pindex, Pfile, PIV, Name, status, agentId, coustomerDetails, unknown1, caseDate, caseId) 
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 
-	// Execute the SQL query
-	_, err := config.DB.Exec(query, 
+	_, err = tx.Exec(query, 
 		data["pindex"], 
 		data["Pfile"], 
 		data["piv"], 
@@ -966,8 +972,41 @@ func SetCase(c *fiber.Ctx) error {
 	)
 
 	if err != nil {
-		log.Println("Database error:", err)
-		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"message": "Failed to register Encrypted Data"})
+		tx.Rollback()
+		log.Println("Database error inserting into CaseName:", err)
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"message": "Failed to register case data"})
+	}
+
+	// If amount is provided, update the CaseAmount table
+	if amount, ok := data["amount"]; ok && amount != "" {
+		amountFloat, err := strconv.ParseFloat(amount, 64)
+		if err != nil {
+			tx.Rollback()
+			log.Println("Error parsing amount:", err)
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"message": "Invalid amount format"})
+		}
+
+		_, err = tx.Exec(`
+			INSERT INTO CaseAmount (pindex, caseId, amount)
+			VALUES (?, ?, ?)
+			ON DUPLICATE KEY UPDATE amount = ?`,
+			data["pindex"],
+			data["caseId"],
+			amountFloat,
+			amountFloat,
+		)
+
+		if err != nil {
+			tx.Rollback()
+			log.Println("Error updating CaseAmount:", err)
+			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"message": "Failed to update case amount"})
+		}
+	}
+
+	// Commit the transaction
+	if err := tx.Commit(); err != nil {
+		log.Println("Error committing transaction:", err)
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"message": "Failed to commit transaction"})
 	}
 
 	return c.JSON(fiber.Map{"message": "Data inserted successfully"})
