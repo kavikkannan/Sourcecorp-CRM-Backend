@@ -93,7 +93,9 @@ func createTables(db *sql.DB) error {
 			note TEXT NOT NULL,
 			casePfile VARCHAR(255) NOT NULL,
 			mark BOOLEAN NOT NULL DEFAULT FALSE,
-			readStatus BOOLEAN NOT NULL DEFAULT FALSE
+			readStatus BOOLEAN NOT NULL DEFAULT FALSE,
+			caseAgentId INT NOT NULL,
+			caseName VARCHAR(255) NOT NULL
 
 		);`,
 		`CREATE TABLE IF NOT EXISTS EncryptedMessages (

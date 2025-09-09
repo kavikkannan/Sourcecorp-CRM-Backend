@@ -1148,6 +1148,15 @@ func SetNotify(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"message": "Invalid or missing fromUser"})
 	}
 
+	caseAgentId, ok := data["caseAgentId"].(string)
+	if !ok {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"message": "Invalid or missing fromUser"})
+	}
+	caseAgentId, err := strconv.Atoi(caseAgentId)
+	if err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"message": "Invalid or missing fromUser"})
+	}
+
 	// Safely parse boolean values
 	isMark := false
 	if val, ok := data["mark"].(bool); ok {
@@ -1165,9 +1174,9 @@ func SetNotify(c *fiber.Ctx) error {
 
 	// Insert into database
 	_, err = config.DB.Exec(`
-		INSERT INTO Notification (fromUser, toUser, tousername, note, casePfile, mark, readStatus) 
-		VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		fromuser, touser, data["tousername"], data["note"], data["casePfile"], isMark, isRead,
+		INSERT INTO Notification (fromUser, toUser, tousername, note, casePfile, mark, readStatus, caseAgentId, caseName) 
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		fromuser, touser, data["tousername"], data["note"], data["casePfile"], isMark, isRead, caseAgentId, caseName,
 	)
 
 	if err != nil {
@@ -1199,6 +1208,8 @@ func GetNotify(c *fiber.Ctx) error {
 		PIndex string 
 		Mark     bool
 		ReadStatus bool 
+		CaseAgentId int
+		CaseName string
 	}
 
 	for rows.Next() {
@@ -1210,9 +1221,11 @@ func GetNotify(c *fiber.Ctx) error {
 			Note string  
 			PIndex string 
 			Mark     bool
-		ReadStatus bool  
+			ReadStatus bool  
+			CaseAgentId int
+			CaseName string
 		}
-		if err := rows.Scan(&notification.ID, &notification.FromUser, &notification.ToUser, &notification.Tousername, &notification.Note, &notification.PIndex, &notification.Mark, &notification.ReadStatus); err != nil {
+		if err := rows.Scan(&notification.ID, &notification.FromUser, &notification.ToUser, &notification.Tousername, &notification.Note, &notification.PIndex, &notification.Mark, &notification.ReadStatus, &notification.CaseAgentId, &notification.CaseName); err != nil {
 			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"message": "Failed to scan notifications"})
 		}
 		notifications = append(notifications, notification)
