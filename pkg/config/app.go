@@ -4,23 +4,24 @@ import (
 	"database/sql"
 	"fmt"
 	"log"
-
+	"os"
 	"time"
 
 	_ "github.com/go-sql-driver/mysql"
 )
 
 var DB *sql.DB
-const (
-	schemaName  = "kk"
-	DB_DSN="kavi:ish@tcp(172.17.0.1:3306)/mydb"
-)
 
 func Connect() {
 	var err error
 
-	// Try connecting to local MySQL
-	DB, err = sql.Open("mysql", DB_DSN)
+	dsn := os.Getenv("DB_DSN")
+	if dsn == "" {
+		log.Fatal("DB_DSN environment variable is not set")
+	}
+
+	// Try connecting to MySQL using DSN from environment
+	DB, err = sql.Open("mysql", dsn)
 	if err != nil {
 		log.Printf("❌ Failed to open database connection: %v\n", err)
 		log.Fatal("Exiting due to database connection error")
@@ -33,7 +34,7 @@ func Connect() {
 		log.Fatal("Exiting due to database connection error")
 	}
 
-	log.Println("✅ Connected to local MySQL successfully!")
+	log.Println("✅ Connected to MySQL successfully!")
 
 	err = createTables(DB)
 	if err != nil {
@@ -45,7 +46,6 @@ func Connect() {
 	DB.SetConnMaxLifetime(5 * time.Minute)
 	log.Println("✅ Database connection pool configured successfully")
 }
-
 
 // createTables ensures tables exist in the database
 func createTables(db *sql.DB) error {

@@ -1148,11 +1148,11 @@ func SetNotify(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"message": "Invalid or missing fromUser"})
 	}
 
-	caseAgentId, ok := data["caseAgentId"].(string)
+	caseAgentIdStr, ok := data["caseAgentId"].(string)
 	if !ok {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"message": "Invalid or missing fromUser"})
 	}
-	caseAgentId, err := strconv.Atoi(caseAgentId)
+	caseAgentId, err := strconv.Atoi(caseAgentIdStr)
 	if err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"message": "Invalid or missing fromUser"})
 	}
@@ -1176,7 +1176,7 @@ func SetNotify(c *fiber.Ctx) error {
 	_, err = config.DB.Exec(`
 		INSERT INTO Notification (fromUser, toUser, tousername, note, casePfile, mark, readStatus, caseAgentId, caseName) 
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		fromuser, touser, data["tousername"], data["note"], data["casePfile"], isMark, isRead, caseAgentId, caseName,
+		fromuser, touser, data["tousername"], data["note"], data["casePfile"], isMark, isRead, caseAgentId, data["caseName"],
 	)
 
 	if err != nil {
