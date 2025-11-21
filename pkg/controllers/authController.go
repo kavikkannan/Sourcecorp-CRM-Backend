@@ -1190,7 +1190,7 @@ func SetNotify(c *fiber.Ctx) error {
 func GetNotify(c *fiber.Ctx) error {
 	toUser := c.Params("toUser")
 	rows, err := config.DB.Query(`
-		SELECT id, fromUser, toUser, tousername, note, casePfile, mark, readStatus 
+		SELECT id, fromUser, toUser, tousername, note, casePfile, mark, readStatus, caseAgentId, caseName 
 		FROM Notification 
 		WHERE toUser = ?`, toUser,
 	)

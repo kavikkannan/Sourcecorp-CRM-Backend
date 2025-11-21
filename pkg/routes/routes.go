@@ -88,4 +88,12 @@ func Setup(app *fiber.App) {
 
 	app.Get("/api/fetch_amount", controllers.GetAmount)                 // Requires pindex as a query parameter
 	app.Post("/api/process_amounts", controllers.GetCasesForDecryption) // Triggers bulk processing of case amounts
+
+	// Leave Management routes
+	app.Post("/api/leave/request", controllers.CreateLeaveRequest)
+	app.Get("/api/leave/requests", controllers.GetLeaveRequests)
+	app.Get("/api/leave/request/:id", controllers.GetLeaveRequestById)
+	app.Post("/api/leave/request/:id/status", AdminMiddleware.AdminMiddleware, controllers.UpdateLeaveStatus)
+	app.Get("/api/leave/balances", controllers.GetLeaveBalances)
+	app.Get("/api/leave/balances/:userId", AdminMiddleware.AdminMiddleware, controllers.GetLeaveBalancesByUserId)
 }

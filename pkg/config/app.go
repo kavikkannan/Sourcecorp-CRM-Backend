@@ -120,6 +120,33 @@ func createTables(db *sql.DB) error {
 		amount DECIMAL(12,2) NOT NULL,
 		FOREIGN KEY (pindex) REFERENCES CaseName(pindex) ON DELETE CASCADE
 	) ENGINE=InnoDB;`,
+		`CREATE TABLE IF NOT EXISTS LeaveRequests (
+			id INT AUTO_INCREMENT PRIMARY KEY,
+			user_id INT NOT NULL,
+			leave_type VARCHAR(50) NOT NULL,
+			from_date DATE NOT NULL,
+			to_date DATE NOT NULL,
+			number_of_days INT NOT NULL,
+			reason TEXT NOT NULL,
+			status VARCHAR(20) NOT NULL DEFAULT 'Pending',
+			remarks TEXT DEFAULT NULL,
+			approved_by INT NULL,
+			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+			updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+			FOREIGN KEY (user_id) REFERENCES Login(id) ON DELETE CASCADE,
+			FOREIGN KEY (approved_by) REFERENCES Login(id) ON DELETE SET NULL
+		) ENGINE=InnoDB;`,
+		`CREATE TABLE IF NOT EXISTS LeaveBalances (
+			id INT AUTO_INCREMENT PRIMARY KEY,
+			user_id INT NOT NULL,
+			leave_type VARCHAR(50) NOT NULL,
+			total_leaves INT NOT NULL DEFAULT 0,
+			used_leaves INT NOT NULL DEFAULT 0,
+			remaining_leaves INT NOT NULL DEFAULT 0,
+			updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+			UNIQUE KEY user_leave_type (user_id, leave_type),
+			FOREIGN KEY (user_id) REFERENCES Login(id) ON DELETE CASCADE
+		) ENGINE=InnoDB;`,
 	}
 
 	for _, stmt := range tableStatements {
