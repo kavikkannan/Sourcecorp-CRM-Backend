@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strings"
 	"time"
 
 	_ "github.com/go-sql-driver/mysql"
@@ -12,16 +13,34 @@ import (
 
 var DB *sql.DB
 
+// ensureParseTime ensures that parseTime=true is in the DSN string
+func ensureParseTime(dsn string) string {
+	if strings.Contains(dsn, "parseTime=true") {
+		return dsn
+	}
+
+	// Check if DSN already has query parameters
+	if strings.Contains(dsn, "?") {
+		// Append parseTime=true to existing parameters
+		return dsn + "&parseTime=true"
+	}
+	// Add parseTime=true as first parameter
+	return dsn + "?parseTime=true"
+}
+
 func Connect() {
 	var err error
 
-		dsn := os.Getenv("DB_DSN")
-		if dsn == "" {
-			log.Fatal("DB_DSN environment variable is not set")
-		}
+	dsn := os.Getenv("DB_DSN")
+	if dsn == "" {
+		log.Fatal("DB_DSN environment variable is not set")
+	}
+
+	// Ensure parseTime=true is in the DSN to properly parse DATE/DATETIME columns
+	dsn = ensureParseTime(dsn)
 
 	// Try connecting to MySQL using DSN from environment
-	DB, err = sql.Open("mysql", dsn) //"root:root@tcp(127.0.0.1:3306)/auth?parseTime=true")
+	DB, err = sql.Open("mysql", dsn)
 	if err != nil {
 		log.Printf("❌ Failed to open database connection: %v\n", err)
 		log.Fatal("Exiting due to database connection error")
