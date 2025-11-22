@@ -39,6 +39,53 @@ func getUserIDFromToken(c *fiber.Ctx) (int, error) {
 	return userID, nil
 }
 
+// Helper function to get user role and admin status from JWT token
+func getUserRoleFromToken(c *fiber.Ctx) (int, bool, string, error) {
+	cookie := c.Cookies("jwt")
+	if cookie == "" {
+		return 0, false, "", fmt.Errorf("no JWT token found")
+	}
+
+	token, err := jwt.ParseWithClaims(cookie, jwt.MapClaims{}, func(token *jwt.Token) (interface{}, error) {
+		return []byte(SecretKey), nil
+	})
+	if err != nil {
+		return 0, false, "", fmt.Errorf("invalid token: %v", err)
+	}
+
+	claims, ok := token.Claims.(jwt.MapClaims)
+	if !ok || claims["Issuer"] == nil {
+		return 0, false, "", fmt.Errorf("invalid claims in token")
+	}
+
+	userID, err := strconv.Atoi(claims["Issuer"].(string))
+	if err != nil {
+		return 0, false, "", fmt.Errorf("invalid user ID in token")
+	}
+
+	// Get IsAdmin from JWT if available
+	isAdminFromJWT := false
+	if isAdminVal, ok := claims["IsAdmin"]; ok {
+		if isAdminBool, ok := isAdminVal.(bool); ok {
+			isAdminFromJWT = isAdminBool
+		}
+	}
+
+	// Get role from database (source of truth)
+	var isAdmin bool
+	var role string
+	err = config.DB.QueryRow("SELECT is_admin, role FROM Login WHERE id = ?", userID).Scan(&isAdmin, &role)
+	if err != nil {
+		// If database query fails, use JWT values as fallback
+		if err == sql.ErrNoRows {
+			return userID, isAdminFromJWT, "", nil
+		}
+		return userID, isAdminFromJWT, "", err
+	}
+
+	return userID, isAdmin, role, nil
+}
+
 // Helper function to check if user is HR or Admin
 func isHROrAdmin(userID int) (bool, error) {
 	var isAdmin bool
@@ -163,12 +210,7 @@ func CreateLeaveRequest(c *fiber.Ctx) error {
 		})
 	}
 
-	if balance.RemainingLeaves < numberOfDays {
-		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
-			"status":  "error",
-			"message": fmt.Sprintf("Insufficient leave balance. Available: %d, Requested: %d", balance.RemainingLeaves, numberOfDays),
-		})
-	}
+	// Balance validation removed - all leave/permission requests are allowed regardless of balance
 
 	// Insert leave request
 	result, err := config.DB.Exec(
@@ -194,7 +236,8 @@ func CreateLeaveRequest(c *fiber.Ctx) error {
 
 // GetLeaveRequests retrieves leave requests
 func GetLeaveRequests(c *fiber.Ctx) error {
-	userID, err := getUserIDFromToken(c)
+	// Get user ID from JWT token (the logged-in user making the request)
+	requestingUserID, err := getUserIDFromToken(c)
 	if err != nil {
 		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{
 			"status":  "error",
@@ -202,69 +245,64 @@ func GetLeaveRequests(c *fiber.Ctx) error {
 		})
 	}
 
-	// Check if user is admin/HR
-	isHRAdmin, err := isHROrAdmin(userID)
+	// Get userId from URL parameter (the user whose requests we want to fetch)
+	targetUserIdStr := c.Params("userId")
+	if targetUserIdStr == "" {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"status":  "error",
+			"message": "User ID is required",
+		})
+	}
+
+	// Convert target userId to integer
+	targetUserId, err := strconv.Atoi(targetUserIdStr)
 	if err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"status":  "error",
+			"message": "Invalid user ID",
+		})
+	}
+
+	// Check if requesting user is HR or Admin (similar to GetUserByID pattern)
+	var isAdmin bool
+	var role string
+	err = config.DB.QueryRow("SELECT is_admin, role FROM Login WHERE id = ?", requestingUserID).Scan(&isAdmin, &role)
+	if err != nil {
+		log.Printf("Error checking user role: %v", err)
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
 			"status":  "error",
 			"message": "Database error",
 		})
 	}
 
-	var rows *sql.Rows
-	query := `SELECT lr.id, lr.user_id, lr.leave_type, lr.from_date, lr.to_date, 
-	          lr.number_of_days, lr.reason, lr.status, lr.remarks, lr.approved_by, 
-	          lr.created_at, lr.updated_at, u.name as user_name, 
-	          COALESCE(approver.name, '') as approver_name
-	          FROM LeaveRequests lr
-	          JOIN Login u ON lr.user_id = u.id
-	          LEFT JOIN Login approver ON lr.approved_by = approver.id`
+	isHRAdmin := isAdmin || role == "HR"
 
+	// Determine which user's requests to fetch
+	var fetchUserId int
 	if isHRAdmin {
-		// HR can see all requests with filters
-		status := c.Query("status")
-		userIdFilter := c.Query("user_id")
-		fromDateFilter := c.Query("from_date")
-		toDateFilter := c.Query("to_date")
-
-		conditions := []string{}
-		args := []interface{}{}
-
-		if status != "" {
-			conditions = append(conditions, "lr.status = ?")
-			args = append(args, status)
-		}
-		if userIdFilter != "" {
-			conditions = append(conditions, "lr.user_id = ?")
-			args = append(args, userIdFilter)
-		}
-		if fromDateFilter != "" {
-			conditions = append(conditions, "lr.from_date >= ?")
-			args = append(args, fromDateFilter)
-		}
-		if toDateFilter != "" {
-			conditions = append(conditions, "lr.to_date <= ?")
-			args = append(args, toDateFilter)
-		}
-
-		if len(conditions) > 0 {
-			query += " WHERE " + fmt.Sprintf("%s", conditions[0])
-			for i := 1; i < len(conditions); i++ {
-				query += " AND " + conditions[i]
-			}
-		}
-
-		query += " ORDER BY lr.created_at DESC"
-
-		rows, err = config.DB.Query(query, args...)
+		// Admin/HR can fetch requests for the target userId
+		fetchUserId = targetUserId
+		log.Printf("Admin/HR user %d fetching requests for user %d", requestingUserID, targetUserId)
 	} else {
-		// Employees see only their own requests
-		query += " WHERE lr.user_id = ? ORDER BY lr.created_at DESC"
-		rows, err = config.DB.Query(query, userID)
+		// Regular users can only fetch their own requests (ignore targetUserId)
+		fetchUserId = requestingUserID
+		log.Printf("Regular user %d fetching their own requests (ignoring targetUserId %d)", requestingUserID, targetUserId)
 	}
 
+	// Build query
+	query := `SELECT id, user_id, leave_type, from_date, to_date, 
+	          number_of_days, reason, status, remarks, approved_by, 
+	          created_at, updated_at
+	          FROM LeaveRequests
+	          WHERE user_id = ?
+	          ORDER BY created_at DESC`
+
+	log.Printf("Query: %s, fetchUserId: %d", query, fetchUserId)
+	
+	var rows *sql.Rows
+	rows, err = config.DB.Query(query, fetchUserId)
 	if err != nil {
-		log.Printf("Error fetching leave requests: %v", err)
+		log.Printf("Query execution error: %v", err)
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
 			"status":  "error",
 			"message": "Failed to fetch leave requests",
@@ -272,8 +310,12 @@ func GetLeaveRequests(c *fiber.Ctx) error {
 	}
 	defer rows.Close()
 
-	var requests []map[string]interface{}
+	// Initialize as empty slice to ensure JSON returns [] instead of null
+	requests := make([]map[string]interface{}, 0)
+	
+	rowCount := 0
 	for rows.Next() {
+		rowCount++
 		var req struct {
 			ID           int
 			UserID       int
@@ -287,25 +329,32 @@ func GetLeaveRequests(c *fiber.Ctx) error {
 			ApprovedBy   sql.NullInt64
 			CreatedAt    time.Time
 			UpdatedAt    time.Time
-			UserName     string
-			ApproverName sql.NullString
 		}
 
 		err := rows.Scan(
 			&req.ID, &req.UserID, &req.LeaveType, &req.FromDate, &req.ToDate,
 			&req.NumberOfDays, &req.Reason, &req.Status, &req.Remarks,
-			&req.ApprovedBy, &req.CreatedAt, &req.UpdatedAt, &req.UserName,
-			&req.ApproverName,
+			&req.ApprovedBy, &req.CreatedAt, &req.UpdatedAt,
 		)
 		if err != nil {
 			log.Printf("Error scanning row: %v", err)
 			continue
 		}
 
+		// Get user name
+		var userName string
+		config.DB.QueryRow("SELECT name FROM Login WHERE id = ?", req.UserID).Scan(&userName)
+
+		// Get approver name if exists
+		var approverName string
+		if req.ApprovedBy.Valid {
+			config.DB.QueryRow("SELECT name FROM Login WHERE id = ?", req.ApprovedBy.Int64).Scan(&approverName)
+		}
+
 		requestMap := map[string]interface{}{
 			"id":             req.ID,
 			"user_id":        req.UserID,
-			"user_name":      req.UserName,
+			"user_name":      userName,
 			"leave_type":     req.LeaveType,
 			"from_date":      req.FromDate.Format("2006-01-02"),
 			"to_date":        req.ToDate.Format("2006-01-02"),
@@ -328,13 +377,30 @@ func GetLeaveRequests(c *fiber.Ctx) error {
 			requestMap["approved_by"] = nil
 		}
 
-		if req.ApproverName.Valid {
-			requestMap["approver_name"] = req.ApproverName.String
+		if approverName != "" {
+			requestMap["approver_name"] = approverName
 		} else {
 			requestMap["approver_name"] = nil
 		}
 
 		requests = append(requests, requestMap)
+		log.Printf("Processed request ID: %d, User ID: %d, Status: %s", req.ID, req.UserID, req.Status)
+	}
+
+	log.Printf("Total rows processed: %d", rowCount)
+
+	// Check for errors from iterating over rows
+	if err = rows.Err(); err != nil {
+		log.Printf("Error iterating rows: %v", err)
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+			"status":  "error",
+			"message": "Error processing leave requests",
+		})
+	}
+
+	// Ensure we return an empty array, not null
+	if requests == nil {
+		requests = make([]map[string]interface{}, 0)
 	}
 
 	return c.JSON(fiber.Map{
@@ -354,11 +420,20 @@ func GetLeaveRequestById(c *fiber.Ctx) error {
 		})
 	}
 
-	requestID := c.Params("id")
-	if requestID == "" {
+	requestIDStr := c.Params("id")
+	if requestIDStr == "" {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
 			"status":  "error",
 			"message": "Request ID is required",
+		})
+	}
+
+	// Convert request ID to integer
+	requestID, err := strconv.Atoi(requestIDStr)
+	if err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"status":  "error",
+			"message": "Invalid request ID",
 		})
 	}
 
@@ -375,25 +450,20 @@ func GetLeaveRequestById(c *fiber.Ctx) error {
 		ApprovedBy   sql.NullInt64
 		CreatedAt    time.Time
 		UpdatedAt    time.Time
-		UserName     string
-		ApproverName sql.NullString
 	}
 
+	// Simplified query without JOINs
 	err = config.DB.QueryRow(
-		`SELECT lr.id, lr.user_id, lr.leave_type, lr.from_date, lr.to_date, 
-		 lr.number_of_days, lr.reason, lr.status, lr.remarks, lr.approved_by, 
-		 lr.created_at, lr.updated_at, u.name as user_name, 
-		 COALESCE(approver.name, '') as approver_name
-		 FROM LeaveRequests lr
-		 JOIN Login u ON lr.user_id = u.id
-		 LEFT JOIN Login approver ON lr.approved_by = approver.id
-		 WHERE lr.id = ?`,
+		`SELECT id, user_id, leave_type, from_date, to_date, 
+		 number_of_days, reason, status, remarks, approved_by, 
+		 created_at, updated_at
+		 FROM LeaveRequests
+		 WHERE id = ?`,
 		requestID,
 	).Scan(
 		&req.ID, &req.UserID, &req.LeaveType, &req.FromDate, &req.ToDate,
 		&req.NumberOfDays, &req.Reason, &req.Status, &req.Remarks,
-		&req.ApprovedBy, &req.CreatedAt, &req.UpdatedAt, &req.UserName,
-		&req.ApproverName,
+		&req.ApprovedBy, &req.CreatedAt, &req.UpdatedAt,
 	)
 
 	if err == sql.ErrNoRows {
@@ -410,18 +480,39 @@ func GetLeaveRequestById(c *fiber.Ctx) error {
 	}
 
 	// Check if user is authorized to view this request
-	isHRAdmin, err := isHROrAdmin(userID)
-	if err == nil && !isHRAdmin && req.UserID != userID {
+	var isAdmin bool
+	var role string
+	err = config.DB.QueryRow("SELECT is_admin, role FROM Login WHERE id = ?", userID).Scan(&isAdmin, &role)
+	if err != nil {
+		log.Printf("Error checking user role: %v", err)
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+			"status":  "error",
+			"message": "Database error",
+		})
+	}
+
+	isHRAdmin := isAdmin || role == "HR"
+	if !isHRAdmin && req.UserID != userID {
 		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{
 			"status":  "error",
 			"message": "Unauthorized to view this request",
 		})
 	}
 
+	// Get user name
+	var userName string
+	config.DB.QueryRow("SELECT name FROM Login WHERE id = ?", req.UserID).Scan(&userName)
+
+	// Get approver name if exists
+	var approverName string
+	if req.ApprovedBy.Valid {
+		config.DB.QueryRow("SELECT name FROM Login WHERE id = ?", req.ApprovedBy.Int64).Scan(&approverName)
+	}
+
 	requestMap := map[string]interface{}{
 		"id":             req.ID,
 		"user_id":        req.UserID,
-		"user_name":      req.UserName,
+		"user_name":      userName,
 		"leave_type":     req.LeaveType,
 		"from_date":      req.FromDate.Format("2006-01-02"),
 		"to_date":        req.ToDate.Format("2006-01-02"),
@@ -444,8 +535,8 @@ func GetLeaveRequestById(c *fiber.Ctx) error {
 		requestMap["approved_by"] = nil
 	}
 
-	if req.ApproverName.Valid {
-		requestMap["approver_name"] = req.ApproverName.String
+	if approverName != "" {
+		requestMap["approver_name"] = approverName
 	} else {
 		requestMap["approver_name"] = nil
 	}

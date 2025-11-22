@@ -91,7 +91,7 @@ func Setup(app *fiber.App) {
 
 	// Leave Management routes
 	app.Post("/api/leave/request", controllers.CreateLeaveRequest)
-	app.Get("/api/leave/requests", controllers.GetLeaveRequests)
+	app.Get("/api/leave/requests/:userId", controllers.GetLeaveRequests)
 	app.Get("/api/leave/request/:id", controllers.GetLeaveRequestById)
 	app.Post("/api/leave/request/:id/status", AdminMiddleware.AdminMiddleware, controllers.UpdateLeaveStatus)
 	app.Get("/api/leave/balances", controllers.GetLeaveBalances)
