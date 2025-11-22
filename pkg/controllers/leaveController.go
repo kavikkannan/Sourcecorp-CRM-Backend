@@ -236,57 +236,68 @@ func CreateLeaveRequest(c *fiber.Ctx) error {
 
 // GetLeaveRequests retrieves leave requests
 func GetLeaveRequests(c *fiber.Ctx) error {
+	log.Printf("========== GetLeaveRequests START ==========")
+	log.Printf("[GetLeaveRequests] Function called at %s", time.Now().Format("2006-01-02 15:04:05"))
+
 	// Get user ID from JWT token (the logged-in user making the request)
 	requestingUserID, err := getUserIDFromToken(c)
 	if err != nil {
+		log.Printf("[GetLeaveRequests] ERROR: Failed to get user ID from token: %v", err)
 		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{
 			"status":  "error",
 			"message": "Unauthenticated",
 		})
 	}
+	log.Printf("[GetLeaveRequests] Requesting User ID from token: %d", requestingUserID)
 
 	// Get userId from URL parameter (the user whose requests we want to fetch)
 	targetUserIdStr := c.Params("userId")
 	if targetUserIdStr == "" {
+		log.Printf("[GetLeaveRequests] ERROR: User ID parameter is missing")
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
 			"status":  "error",
 			"message": "User ID is required",
 		})
 	}
+	log.Printf("[GetLeaveRequests] Target User ID from URL parameter: %s", targetUserIdStr)
 
 	// Convert target userId to integer
 	targetUserId, err := strconv.Atoi(targetUserIdStr)
 	if err != nil {
+		log.Printf("[GetLeaveRequests] ERROR: Invalid user ID format: %s, error: %v", targetUserIdStr, err)
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
 			"status":  "error",
 			"message": "Invalid user ID",
 		})
 	}
+	log.Printf("[GetLeaveRequests] Target User ID converted to int: %d", targetUserId)
 
 	// Check if requesting user is HR or Admin (similar to GetUserByID pattern)
 	var isAdmin bool
 	var role string
 	err = config.DB.QueryRow("SELECT is_admin, role FROM Login WHERE id = ?", requestingUserID).Scan(&isAdmin, &role)
 	if err != nil {
-		log.Printf("Error checking user role: %v", err)
+		log.Printf("[GetLeaveRequests] ERROR: Failed to check user role for user %d: %v", requestingUserID, err)
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
 			"status":  "error",
 			"message": "Database error",
 		})
 	}
+	log.Printf("[GetLeaveRequests] User %d - isAdmin: %v, role: %s", requestingUserID, isAdmin, role)
 
 	isHRAdmin := isAdmin || role == "HR"
+	log.Printf("[GetLeaveRequests] User is HR/Admin: %v", isHRAdmin)
 
 	// Determine which user's requests to fetch
 	var fetchUserId int
 	if isHRAdmin {
 		// Admin/HR can fetch requests for the target userId
 		fetchUserId = targetUserId
-		log.Printf("Admin/HR user %d fetching requests for user %d", requestingUserID, targetUserId)
+		log.Printf("[GetLeaveRequests] ✓ Admin/HR user %d fetching requests for user %d", requestingUserID, targetUserId)
 	} else {
 		// Regular users can only fetch their own requests (ignore targetUserId)
 		fetchUserId = requestingUserID
-		log.Printf("Regular user %d fetching their own requests (ignoring targetUserId %d)", requestingUserID, targetUserId)
+		log.Printf("[GetLeaveRequests] ✓ Regular user %d fetching their own requests (ignoring targetUserId %d)", requestingUserID, targetUserId)
 	}
 
 	// Build query
@@ -297,24 +308,37 @@ func GetLeaveRequests(c *fiber.Ctx) error {
 	          WHERE user_id = ?
 	          ORDER BY created_at DESC`
 
-	log.Printf("Query: %s, fetchUserId: %d", query, fetchUserId)
-	
+	log.Printf("[GetLeaveRequests] Executing query for fetchUserId: %d", fetchUserId)
+	log.Printf("[GetLeaveRequests] Query: %s", query)
+
+	// First, check if there are any leave requests for this user in the database
+	var totalCount int
+	countErr := config.DB.QueryRow("SELECT COUNT(*) FROM LeaveRequests WHERE user_id = ?", fetchUserId).Scan(&totalCount)
+	if countErr != nil {
+		log.Printf("[GetLeaveRequests] WARNING: Could not count records: %v", countErr)
+	} else {
+		log.Printf("[GetLeaveRequests] Database shows %d total leave request(s) for user_id %d", totalCount, fetchUserId)
+	}
+
 	var rows *sql.Rows
 	rows, err = config.DB.Query(query, fetchUserId)
 	if err != nil {
-		log.Printf("Query execution error: %v", err)
+		log.Printf("[GetLeaveRequests] ERROR: Query execution failed for user %d: %v", fetchUserId, err)
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
 			"status":  "error",
 			"message": "Failed to fetch leave requests",
 		})
 	}
 	defer rows.Close()
+	log.Printf("[GetLeaveRequests] Query executed successfully, rows obtained")
 
 	// Initialize as empty slice to ensure JSON returns [] instead of null
 	requests := make([]map[string]interface{}, 0)
-	
+
 	rowCount := 0
+	log.Printf("[GetLeaveRequests] Starting to iterate through rows...")
 	for rows.Next() {
+		log.Printf("[GetLeaveRequests] Processing row %d...", rowCount+1)
 		rowCount++
 		var req struct {
 			ID           int
@@ -337,7 +361,7 @@ func GetLeaveRequests(c *fiber.Ctx) error {
 			&req.ApprovedBy, &req.CreatedAt, &req.UpdatedAt,
 		)
 		if err != nil {
-			log.Printf("Error scanning row: %v", err)
+			log.Printf("[GetLeaveRequests] ERROR: Failed to scan row %d: %v", rowCount, err)
 			continue
 		}
 
@@ -384,18 +408,25 @@ func GetLeaveRequests(c *fiber.Ctx) error {
 		}
 
 		requests = append(requests, requestMap)
-		log.Printf("Processed request ID: %d, User ID: %d, Status: %s", req.ID, req.UserID, req.Status)
+		log.Printf("[GetLeaveRequests] ✓ Processed request ID: %d, User ID: %d, User Name: %s, Leave Type: %s, Status: %s, Days: %d",
+			req.ID, req.UserID, userName, req.LeaveType, req.Status, req.NumberOfDays)
 	}
 
-	log.Printf("Total rows processed: %d", rowCount)
+	log.Printf("[GetLeaveRequests] Finished iterating rows. Total rows processed: %d", rowCount)
+	log.Printf("[GetLeaveRequests] Total requests in response array: %d", len(requests))
 
 	// Check for errors from iterating over rows
 	if err = rows.Err(); err != nil {
-		log.Printf("Error iterating rows: %v", err)
+		log.Printf("[GetLeaveRequests] ERROR: Error iterating rows: %v", err)
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
 			"status":  "error",
 			"message": "Error processing leave requests",
 		})
+	}
+
+	// If we expected rows but got none, log a warning
+	if totalCount > 0 && rowCount == 0 {
+		log.Printf("[GetLeaveRequests] WARNING: Database shows %d records but query returned 0 rows. Possible data mismatch!", totalCount)
 	}
 
 	// Ensure we return an empty array, not null
@@ -403,10 +434,13 @@ func GetLeaveRequests(c *fiber.Ctx) error {
 		requests = make([]map[string]interface{}, 0)
 	}
 
+	log.Printf("[GetLeaveRequests] Final response: status=success, count=%d, data_length=%d", len(requests), len(requests))
+	log.Printf("========== GetLeaveRequests END ==========")
+
 	return c.JSON(fiber.Map{
-		"status":  "success",
-		"data":    requests,
-		"count":   len(requests),
+		"status": "success",
+		"data":   requests,
+		"count":  len(requests),
 	})
 }
 
@@ -709,9 +743,9 @@ func GetLeaveBalances(c *fiber.Ctx) error {
 	var balances []map[string]interface{}
 	for rows.Next() {
 		var balance struct {
-			LeaveType      string
-			TotalLeaves    int
-			UsedLeaves     int
+			LeaveType       string
+			TotalLeaves     int
+			UsedLeaves      int
 			RemainingLeaves int
 		}
 
@@ -722,9 +756,9 @@ func GetLeaveBalances(c *fiber.Ctx) error {
 		}
 
 		balances = append(balances, map[string]interface{}{
-			"leave_type":      balance.LeaveType,
-			"total_leaves":    balance.TotalLeaves,
-			"used_leaves":     balance.UsedLeaves,
+			"leave_type":       balance.LeaveType,
+			"total_leaves":     balance.TotalLeaves,
+			"used_leaves":      balance.UsedLeaves,
 			"remaining_leaves": balance.RemainingLeaves,
 		})
 	}
@@ -778,9 +812,9 @@ func GetLeaveBalancesByUserId(c *fiber.Ctx) error {
 	var balances []map[string]interface{}
 	for rows.Next() {
 		var balance struct {
-			LeaveType      string
-			TotalLeaves    int
-			UsedLeaves     int
+			LeaveType       string
+			TotalLeaves     int
+			UsedLeaves      int
 			RemainingLeaves int
 		}
 
@@ -791,9 +825,9 @@ func GetLeaveBalancesByUserId(c *fiber.Ctx) error {
 		}
 
 		balances = append(balances, map[string]interface{}{
-			"leave_type":      balance.LeaveType,
-			"total_leaves":    balance.TotalLeaves,
-			"used_leaves":     balance.UsedLeaves,
+			"leave_type":       balance.LeaveType,
+			"total_leaves":     balance.TotalLeaves,
+			"used_leaves":      balance.UsedLeaves,
 			"remaining_leaves": balance.RemainingLeaves,
 		})
 	}
@@ -803,4 +837,3 @@ func GetLeaveBalancesByUserId(c *fiber.Ctx) error {
 		"data":   balances,
 	})
 }
-

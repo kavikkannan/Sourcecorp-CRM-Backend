@@ -15,13 +15,13 @@ var DB *sql.DB
 func Connect() {
 	var err error
 
-	dsn := os.Getenv("DB_DSN")
-	if dsn == "" {
-		log.Fatal("DB_DSN environment variable is not set")
-	}
+		dsn := os.Getenv("DB_DSN")
+		if dsn == "" {
+			log.Fatal("DB_DSN environment variable is not set")
+		}
 
 	// Try connecting to MySQL using DSN from environment
-	DB, err = sql.Open("mysql", dsn)
+	DB, err = sql.Open("mysql", dsn) //"root:root@tcp(127.0.0.1:3306)/auth?parseTime=true")
 	if err != nil {
 		log.Printf("❌ Failed to open database connection: %v\n", err)
 		log.Fatal("Exiting due to database connection error")
